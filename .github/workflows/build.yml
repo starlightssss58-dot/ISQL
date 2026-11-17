@@ -14,6 +14,39 @@ jobs:
       - name: Unzip project
         run: unzip -q *.zip -d proj
 
+      - name: Patch Jaybird for Android
+        run: |
+          mkdir -p proj/app/libs
+          python3 - <<'PY'
+          import re, sys, urllib.request, zipfile
+          url = "https://repo1.maven.org/maven2/org/firebirdsql/jdbc/jaybird/5.0.5.java11/jaybird-5.0.5.java11.jar"
+          urllib.request.urlretrieve(url, "jaybird-orig.jar")
+          old = b"\x01\x00\x08" + b"\\{(\\d+)}"
+          new = b"\x01\x00\x09" + b"\\{(\\d+)\\}"
+          patched = 0
+          with zipfile.ZipFile("jaybird-orig.jar") as zin, zipfile.ZipFile("proj/app/libs/jaybird-patched.jar", "w", zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  name = item.filename
+                  if name.startswith("META-INF/") and name.upper().endswith((".SF", ".RSA", ".DSA", ".EC")):
+                      continue
+                  data = zin.read(name)
+                  if name.endswith(".class") and old in data:
+                      data = data.replace(old, new)
+                      patched += 1
+                      print("patched", name)
+                  zout.writestr(item, data)
+          print("classes patched:", patched)
+          if patched == 0:
+              sys.exit("Pattern not found in the Jaybird jar")
+          p = "proj/app/build.gradle.kts"
+          s = open(p).read()
+          s2 = re.sub(r'implementation\("org\.firebirdsql\.jdbc:jaybird:[^"]+"\)\s*\{[^}]*\}', 'implementation(files("libs/jaybird-patched.jar"))', s)
+          if s2 == s:
+              sys.exit("Dependency line not found in build.gradle.kts")
+          open(p, "w").write(s2)
+          print("build.gradle.kts updated")
+          PY
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
